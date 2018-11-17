@@ -1,7 +1,7 @@
 import curses
 from curses import wrapper
 import logging
-from logging import debug
+from logging import debug, error
 import operator
 import random
 import sys
@@ -18,15 +18,16 @@ class Object:
     def __init__(self):
         self.uid = get_uid()
 
-class LilDude(Object):
-    def __init__(self, x, y, world, parameters):
+class Person(Object):
+    def __init__(self, world, parameters):
         super().__init__()
+        self.name = 'Person'
         self.alive = True
         self._age = 0
         self.hunger = 0
         self.ch = 'O'
-        self.x = x
-        self.y = y
+        self.x = None
+        self.y = None
         self.hunger_threshold = parameters['hunger_threshold']
         self.starvation_threshold = parameters['starvation_threshold']
         self.max_age = parameters['max_age']
@@ -70,20 +71,21 @@ class LilDude(Object):
                     self.world.eat(target, self)
 
 class Food(Object):
-    def __init__(self, x, y):
+    def __init__(self):
         super().__init__()
+        self.name = 'Food'
         self.ch = '.'
-        self.x = x
-        self.y = y
-        debug('created a Food at ({},{})'.format(x, y))
+        self.x = None
+        self.y = None
 
     def update(self):
         pass
 
 class World(Object):
-    def __init__(self, lines, cols, population, parameters):
-        debug('creating world size lines {} cols {}'.format(lines, cols))
+    def __init__(self, lines, cols, parameters):
         super().__init__()
+        debug('creating world size lines {} cols {}'.format(lines, cols))
+        self.observers = set()
         self.rows = lines
         self.cols = cols
         self._age = 0
@@ -97,20 +99,26 @@ class World(Object):
         self.animals = list()
         self.forbidden_cells = [(cols-1, lines-1)]
         debug('forbidden cells: {}'.format(self.forbidden_cells))
-        for n in range(population):
-            (x,y) = self._location()
-            lil_dude = LilDude(x, y, world=self, parameters=self.parameters)
-            self.occupants[(x,y)] = lil_dude
-            self.animals.append(lil_dude)
+        for n in range(parameters['initial_population']):
+            lil_dude = Person(world=self, parameters=self.parameters)
+            self.place(lil_dude, category='animal', retry=True)
+        for n in range(parameters['initial_food']):
+            food = Food()
+            self.place(food, category='object', retry=True)
 
-        self.observers = set()
-
-    def _location(self):
-            x = random.randint(0, self.cols-1)
-            y = random.randint(0, self.rows-1)
-            while (x,y) in self.occupants or (x,y) in self.forbidden_cells:
+    def _location(self, retry=False):
+            while True:
                 x = random.randint(0, self.cols-1)
                 y = random.randint(0, self.rows-1)
+                if (x,y) in self.forbidden_cells:
+                    continue
+                if (x,y) in self.occupants:
+                    if retry:
+                        continue
+                    else: 
+                        (x,y) = None, None
+                        break
+                break
             return (x,y)
 
     def move(self, subject, destination):
@@ -118,6 +126,21 @@ class World(Object):
 
     def eat(self, target, eater):
         self.eat_requests.append((target, eater))
+
+    def place(self, obj, category, retry=False):
+        (x,y) = self._location(retry)
+        if (x,y) != (None, None):
+            obj.x = x
+            obj.y = y
+            self.occupants[(x,y)] = obj
+            if category == 'animal':
+                self.animals.append(obj)
+            elif category == 'object':
+                self.objects.append(obj)
+            else:
+                error('placed {} {} with unknown category {}'.format(obj.name, obj, category))
+            debug('placed a {} at {},{}'.format(obj.name, obj.x, obj.y))
+
 
     def update(self):
         for obj in self.objects:
@@ -171,12 +194,11 @@ class World(Object):
 #                            debug('creating child at {} {}, population is {}'.format(parents[n].x, parents[n].y, len(self.animals)))
 #
         # place a food
+        # TODO scale food placement rate to world area
         r = random.random()
         if r > 1-self.parameters['food_chance']:
-            (x,y) = self._location()
-            food = Food(x,y)
-            self.occupants[(x,y)] = food
-            self.objects.append(food)
+            food = Food()
+            self.place(food, category='object')
 
         self._age += 1
 
@@ -249,9 +271,8 @@ def main(stdscr):
     (stats_win, world_win) = make_windows()
     screen = Screen(stats_win, world_win)
     (height, width) = world_win.getmaxyx()
-    initial_population = parameters['initial_population']
     while True:
-        world = World(lines=height, cols=width, population=initial_population, parameters=parameters)
+        world = World(lines=height, cols=width, parameters=parameters)
         world.register_observer(screen)
         period = parameters['tick_seconds']
         while (world.population > 0):
@@ -262,6 +283,7 @@ def main(stdscr):
 def get_parameters():
     parameters = dict()
     parameters['initial_population'] = 10
+    parameters['initial_food'] = 20
     parameters['max_population'] = 200
     parameters['max_age'] = sys.maxsize
     parameters['fertility'] = 0.8
