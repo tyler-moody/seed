@@ -25,12 +25,16 @@ class Person(Object):
         self.name = 'Person'
         self.alive = True
         self._age = 0
-        self.hunger = 0
         self.ch = 'O'
         self.x = None
         self.y = None
+        self.last_ate = -1
+        self.last_mated = 0
+        self.fertility = parameters['fertility']
         self.hunger_threshold = parameters['hunger_threshold']
         self.starvation_threshold = parameters['starvation_threshold']
+        self.hunger = self.starvation_threshold // 2
+        self.time_til_mate = self.starvation_threshold - self.hunger + 1
         self.max_age = parameters['max_age']
         self.world = world
         self.observers = set()
@@ -50,19 +54,37 @@ class Person(Object):
             self.alive = False
             return
 
+        self.mate()
+        self.move()
+
+    def _adjacent_cells(self):
+        return [tuple(map(operator.add, (self.x, self.y), delta)) for delta in self.deltas]
+
+    def eat_food_within_reach(self):
+        coordinates = self._adjacent_cells()
+        for coord in coordinates:
+            if coord in self.world.occupants:
+                target = self.world.occupants[coord]
+                if type(target) == Food:
+                    self.world.eat(target, self)
+
+    def move(self):
         r = random.random()
         n = int(r*8)
         delta = self.deltas[n]
         coordinate = tuple(map(operator.add, delta, (self.x, self.y)))
         self.world.move(self, coordinate)
 
-    def eat_food_within_reach(self):
-        coordinates = [tuple(map(operator.add, (self.x, self.y), delta)) for delta in self.deltas]
-        for coord in coordinates:
-            if coord in self.world.occupants:
-                target = self.world.occupants[coord]
-                if type(target) == Food:
-                    self.world.eat(target, self)
+    def mate(self):
+        if self.last_ate > self.last_mated:
+            coordinates = self._adjacent_cells()
+            for coord in coordinates:
+                if coord in self.world.occupants:
+                    target = self.world.occupants[coord]
+                    if type(target) == Person:
+                        r = random.random()
+                        if r > 1-self.fertility:
+                            self.world.reproduce(self, target)
 
 class Food(Object):
     def __init__(self):
@@ -100,6 +122,24 @@ class World(Object):
             food = Food()
             self.place(food, category='object', retry=True)
 
+    def move(self, subject, destination):
+        self.move_requests.append((subject, destination))
+
+    def eat(self, target, eater):
+        self.eat_requests.append((target, eater))
+
+    def reproduce(self, subject0, subject1):
+        coordinates = subject0._adjacent_cells()
+        for coord in coordinates:
+            coord = self._sanitize_location(coord)
+            if coord not in self.occupants and coord not in self.forbidden_cells:
+                child = Person(world=self, parameters=self.parameters)
+                self.place(child, category='animal', retry=False, location=coord)
+                subject0.last_mated = self.age
+                subject1.last_mated = self.age
+                debug('{} mated with {} to create {} on tick {}'.format(subject0.uid, subject1.uid, child.uid, self.age))
+                return
+
     def _location(self, retry=False):
             while True:
                 x = random.randint(0, self.cols-1)
@@ -115,14 +155,11 @@ class World(Object):
                 break
             return (x,y)
 
-    def move(self, subject, destination):
-        self.move_requests.append((subject, destination))
-
-    def eat(self, target, eater):
-        self.eat_requests.append((target, eater))
-
-    def place(self, obj, category, retry=False):
-        (x,y) = self._location(retry)
+    def place(self, obj, category, retry=False, location=None):
+        if location is None:
+            (x,y) = self._location(retry)
+        else:
+            (x,y) = location
         if (x,y) != (None, None):
             obj.x = x
             obj.y = y
@@ -135,6 +172,9 @@ class World(Object):
                 error('placed {} {} with unknown category {}'.format(obj.name, obj, category))
             debug('placed a {} at {},{}'.format(obj.name, obj.x, obj.y))
 
+    def _sanitize_location(self, location):
+        (x,y) = location
+        return (x%self.cols, y%self.rows)
 
     def update(self):
         for obj in self.objects:
@@ -143,8 +183,9 @@ class World(Object):
         self.eat_requests = list()
         for animal in self.animals:
             animal.update()
+
         for (subject, destination) in self.move_requests:
-            (x, y) = destination
+            (x, y) = self._sanitize_location(destination)
             x = x % self.cols
             y = y % self.rows
             if (x,y) in self.forbidden_cells:
@@ -161,12 +202,15 @@ class World(Object):
                 subject.x = x
                 subject.y = y
                 self.occupants[(x,y)] = subject
+
         for (target, eater) in self.eat_requests:
             if target in self.objects:
                 self.objects.remove(target)
                 del self.occupants[(target.x, target.y)]
                 eater.hunger = 0
-                self.eat_requests = [req for req in self.eat_requests if req[1] is not eater]
+                eater.last_ate = self.age
+                self.eat_requests = [req for req in self.eat_requests if req[1] is not eater and req[0] is not target]
+                debug('{} ate {}'.format(eater.uid, target.uid))
 
         # trim the dead animals
         for animal in self.animals:
@@ -174,19 +218,6 @@ class World(Object):
                 del self.occupants[(animal.x, animal.y)]
                 self.animals.remove(animal)
 
-        # look for collisions
-#        parents = self.animals
-#        for n in range(len(parents)):
-#            for m in range(n+1, len(parents)):
-#                if parents[n].x == parents[m].x and parents[n].y == parents[m].y:
-#                    debug('collision at {} {}'.format(parents[n].x, parents[n].y))
-#                    if len(self.animals) < self.parameters['population_cap']:
-#                        r = random.random()
-#                        if r > self.parameters['fertility']:
-#                            child = LilDude(parents[n].x, parents[n].y)
-#                            self.animals.append(child)
-#                            debug('creating child at {} {}, population is {}'.format(parents[n].x, parents[n].y, len(self.animals)))
-#
         # place a food
         # TODO scale food placement rate to world area
         r = random.random()
@@ -279,12 +310,12 @@ def get_parameters():
     parameters['initial_population'] = 10
     parameters['initial_food'] = 20
     parameters['max_population'] = 200
-    parameters['max_age'] = sys.maxsize
-    parameters['fertility'] = 0.8
-    parameters['food_chance'] = 0.2
-    parameters['hunger_threshold'] = 50
+    parameters['max_age'] = 200
+    parameters['fertility'] = 0.5
+    parameters['food_chance'] = 0.5
+    parameters['hunger_threshold'] = 75
     parameters['starvation_threshold'] = 100
-    parameters['tick_seconds'] = None
+    parameters['tick_seconds'] = 0.01
     return parameters
 
 logging.basicConfig(filename='log', filemode='w', level=logging.DEBUG)
