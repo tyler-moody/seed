@@ -17,6 +17,7 @@ def get_uid():
 class Object:
     def __init__(self):
         self.uid = get_uid()
+        self.deltas = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
 
 class Person(Object):
     def __init__(self, world, parameters):
@@ -50,20 +51,13 @@ class Person(Object):
             return
 
         r = random.random()
-        if r < 0.25:
-            delta = (0,-1)
-        elif r < 0.5:
-            delta = (0, 1)
-        elif r < 0.75:
-            delta = (1, 0)
-        else:
-            delta = (-1, 0)
+        n = int(r*8)
+        delta = self.deltas[n]
         coordinate = tuple(map(operator.add, delta, (self.x, self.y)))
         self.world.move(self, coordinate)
 
     def eat_food_within_reach(self):
-        deltas = [(-1, 0), (-1, -1), (0, 1), (1, 1)]
-        coordinates = [tuple(map(operator.add, (self.x, self.y), delta)) for delta in deltas]
+        coordinates = [tuple(map(operator.add, (self.x, self.y), delta)) for delta in self.deltas]
         for coord in coordinates:
             if coord in self.world.occupants:
                 target = self.world.occupants[coord]
