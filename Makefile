@@ -1,4 +1,4 @@
-all:	test
+all:	run
 
-test:	
-	python src/seed.py
+run:
+	python seed/main.py
